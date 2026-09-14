@@ -1,6 +1,7 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import { assets } from '../../assets/assets'
+import { UserButton } from '@clerk/react'
 
 const AdminNavbar = () => {
   return (
@@ -8,6 +9,7 @@ const AdminNavbar = () => {
         <Link to="/">
             <img src={assets.logo} alt='Logo' className='w-36 h-auto'/>
         </Link>
+        <UserButton />
     </div>
   )
 }

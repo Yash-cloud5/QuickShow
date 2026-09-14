@@ -2,16 +2,20 @@ import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { assets } from '../assets/assets'
 import { FaSearch } from 'react-icons/fa'
-import { MenuIcon, TicketPlus, XIcon } from 'lucide-react'
+import { LayoutDashboard, MenuIcon, TicketPlus, XIcon } from 'lucide-react'
 import { useClerk, useUser, UserButton } from '@clerk/react'
+import { useAppContext } from '../context/AppContext'
 
 const Navbar = () => {
 
   const [isOpen, setIsOpen] = useState(false)
 
   const { user } = useUser()
+  const { isAdmin } = useAppContext()
   const { openSignIn } = useClerk()
   const navigate = useNavigate()
+
+  const {favoriteMovies} = useAppContext()
 
   return (
 
@@ -119,7 +123,8 @@ const Navbar = () => {
 
         {/* Favourites */}
 
-        <Link
+        { favoriteMovies.length>0 &&
+          <Link
           to='/favorite'
           onClick={() => {
             scrollTo(0, 0);
@@ -127,7 +132,7 @@ const Navbar = () => {
           }}
         >
           Favourites
-        </Link>
+        </Link>}
 
       </div>
 
@@ -160,10 +165,18 @@ const Navbar = () => {
 
             <UserButton.MenuItems>
 
+              {isAdmin && (
+                <UserButton.Action
+                  label='Admin Dashboard'
+                  labelIcon={<LayoutDashboard width={15} />}
+                  onClick={() => navigate('/admin')}
+                />
+              )}
+
               <UserButton.Action
                 label='My Bookings'
                 labelIcon={<TicketPlus width={15} />}
-                onClick={() => navigate('/mybookings')}
+                onClick={() => navigate('/my-bookings')}
               />
 
             </UserButton.MenuItems>
