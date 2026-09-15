@@ -1,7 +1,8 @@
 import Booking from "../models/Booking.js";
 import Show from "../models/Show.js";
 import { getAuth } from "@clerk/express";
-import stripe from 'stripe'
+import stripe from 'stripe';
+import { inngest } from "../inngest/index.js";
 
 
 // CHECK WHETHER SELECTED SEATS ARE AVAILABLE
@@ -30,6 +31,10 @@ const checkSeatsAvailability = async (showId, selectedSeats) => {
 
 // API TO CREATE A BOOKING
 export const createBooking = async (req, res) => {
+    let showData = null;
+    let booking = null;
+    let selectedSeats = [];
+
     try {
         const auth = getAuth(req);
         const userId = auth?.userId || req.auth?.userId || (typeof req.auth === 'function' ? req.auth()?.userId : null);
@@ -41,7 +46,8 @@ export const createBooking = async (req, res) => {
             });
         }
 
-        const { showId, selectedSeats } = req.body;
+        const { showId } = req.body;
+        selectedSeats = req.body.selectedSeats || [];
         const { origin } = req.headers;
 
         // CHECK IF SELECTED SEATS ARE AVAILABLE
@@ -59,7 +65,7 @@ export const createBooking = async (req, res) => {
 
 
         // GET SHOW DETAILS
-        const showData = await Show.findById(showId).populate("movie");
+        showData = await Show.findById(showId).populate("movie");
 
         if (!showData) {
             return res.json({
@@ -70,7 +76,7 @@ export const createBooking = async (req, res) => {
 
 
         // CREATE A NEW BOOKING
-        const booking = await Booking.create({
+        booking = await Booking.create({
             user: userId,
             show: showId,
             amount: showData.showPrice * selectedSeats.length,
@@ -79,6 +85,9 @@ export const createBooking = async (req, res) => {
 
 
         // MARK SELECTED SEATS AS OCCUPIED
+        if (!showData.occupiedSeats) {
+            showData.occupiedSeats = {};
+        }
         selectedSeats.forEach((seat) => {
             showData.occupiedSeats[seat] = userId;
         });
@@ -119,11 +128,11 @@ export const createBooking = async (req, res) => {
         booking.paymentLink = session.url
         await booking.save()
 
-        //Run inngest sheduler func. to check payment status after 10 mins
-        await innegest.send({
-            name:"app/checkpayment",
-            data:{
-                bookingId : booking_.id.toString()
+        //Run inngest scheduler func. to check payment status after 10 mins
+        await inngest.send({
+            name: "app/checkpayment",
+            data: {
+                bookingId: booking._id.toString()
             }
         })
 
@@ -133,7 +142,30 @@ export const createBooking = async (req, res) => {
         });
 
     } catch (error) {
-        console.log(error.message);
+        console.error("Create booking error:", error.message);
+
+        // Rollback booked seats & booking if creation failed midway
+        if (showData && selectedSeats && selectedSeats.length > 0) {
+            try {
+                if (showData.occupiedSeats) {
+                    selectedSeats.forEach((seat) => {
+                        delete showData.occupiedSeats[seat];
+                    });
+                    showData.markModified("occupiedSeats");
+                    await showData.save();
+                }
+            } catch (cleanupErr) {
+                console.error("Failed to release seats on rollback:", cleanupErr.message);
+            }
+        }
+
+        if (booking && booking._id) {
+            try {
+                await Booking.findByIdAndDelete(booking._id);
+            } catch (cleanupErr) {
+                console.error("Failed to delete booking on rollback:", cleanupErr.message);
+            }
+        }
 
         res.json({
             success: false,

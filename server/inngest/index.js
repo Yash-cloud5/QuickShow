@@ -2,6 +2,7 @@ import { Inngest } from "inngest";
 import User from "../models/Users.js";
 import Booking from "../models/Booking.js";
 import Show from "../models/Show.js";
+import sendEmail from "../configs/nodeMailer.js";
 
 // Create Inngest client
 export const inngest = new Inngest({
@@ -131,13 +132,9 @@ const releaseSeatsAndDeleteBooking = inngest.createFunction(
     async ({ event, step }) => {
 
         // Wait for 10 minutes
-        const tenMinutesLater = new Date(
-            Date.now() + 10 * 60 * 1000
-        );
-
-        await step.sleepUntil(
+        await step.sleep(
             "wait-for-10-minutes",
-            tenMinutesLater
+            "10m"
         );
 
         // Check payment status
@@ -183,13 +180,14 @@ const releaseSeatsAndDeleteBooking = inngest.createFunction(
                 }
 
                 // Release booked seats
-                booking.bookedSeats.forEach((seat) => {
-                    delete show.occupiedSeats[seat];
-                });
+                if (show.occupiedSeats && Array.isArray(booking.bookedSeats)) {
+                    booking.bookedSeats.forEach((seat) => {
+                        delete show.occupiedSeats[seat];
+                    });
 
-                show.markModified("occupiedSeats");
-
-                await show.save();
+                    show.markModified("occupiedSeats");
+                    await show.save();
+                }
 
                 // Delete unpaid booking
                 await Booking.findByIdAndDelete(
@@ -204,10 +202,98 @@ const releaseSeatsAndDeleteBooking = inngest.createFunction(
     }
 );
 
+// Inngest function to send an email when user books a ticket
+const sendBookingConfirmationEmail = inngest.createFunction(
+    {
+        id: "send-booking-confirmation-email",
+        triggers: [{ event: "app/show.booked" }]
+    },
+    async ({ event, step }) => {
+
+        const { bookingId } = event.data;
+
+        const booking = await Booking.findById(bookingId)
+            .populate({
+                path: "show",
+                populate: {
+                    path: "movie",
+                    model: "Movie"
+                }
+            })
+            .populate("user");
+
+        // Check if booking exists
+        if (!booking) {
+            console.log(`Booking not found: ${bookingId}`);
+            return;
+        }
+
+        // Check if user exists
+        if (!booking.user) {
+            console.log(`User not found for booking: ${bookingId}`);
+            return;
+        }
+
+        // Check if show exists
+        if (!booking.show) {
+            console.log(`Show not found for booking: ${bookingId}`);
+            return;
+        }
+
+        // Check if movie exists
+        if (!booking.show.movie) {
+            console.log(`Movie not found for booking: ${bookingId}`);
+            return;
+        }
+
+        await sendEmail({
+            to: booking.user.email,
+            subject: `Payment Confirmation: ${booking.show.movie.title} booked!`,
+            body: `<div style="font-family: Arial, sans-serif; line-height: 1.5;">
+                    <h2>Hi ${booking.user.name},</h2>
+                    <p>
+                        Your booking for
+                        <strong style="color: #F84565;">
+                            ${booking.show.movie.title}
+                        </strong>
+                        is confirmed.
+                    </p>
+                    <p>
+                        <strong>Date:</strong>
+                        ${new Date(
+                            booking.show.showDateTime
+                        ).toLocaleDateString("en-US", {
+                            timeZone: "Asia/Kolkata"
+                        })}
+                        <br />
+                        <strong>Time:</strong>
+                        ${new Date(
+                            booking.show.showDateTime
+                        ).toLocaleTimeString("en-US", {
+                            timeZone: "Asia/Kolkata"
+                        })}
+                    </p>
+                    <p>
+                        Enjoy the show! 🍿
+                    </p>
+                    <p>
+                        Thanks for booking with us!<br />
+                        QuickShow Team
+                    </p>
+                </div>
+            `
+        });
+        console.log(
+            `Booking confirmation email sent to ${booking.user.email}`
+        );
+    }
+);
+
 // Export all Inngest functions
 export const functions = [
     syncUserCreation,
     syncUserDeletion,
     syncUserUpdation,
-    releaseSeatsAndDeleteBooking
+    releaseSeatsAndDeleteBooking,
+    sendBookingConfirmationEmail
 ];
