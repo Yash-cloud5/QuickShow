@@ -11,9 +11,22 @@ export const protectAdmin = async (req, res, next) => {
 
         const user = await clerkClient.users.getUser(userId);
 
-        const isAdmin = user?.privateMetadata?.role === 'admin' || user?.publicMetadata?.role === 'admin';
+        const meta = {
+            ...(user?.unsafeMetadata || {}),
+            ...(user?.publicMetadata || {}),
+            ...(user?.privateMetadata || {})
+        };
+
+        const isAdmin = 
+            String(meta.role || '').toLowerCase() === 'admin' ||
+            String(meta.user || '').toLowerCase() === 'admin' ||
+            meta.isAdmin === true ||
+            meta.isAdmin === 'true' ||
+            meta.admin === true ||
+            meta.admin === 'true';
 
         if (!isAdmin) {
+            console.log(`protectAdmin: User ${userId} (${user?.emailAddresses?.[0]?.emailAddress}) is not an admin. Metadata:`, meta);
             return res.status(403).json({ success: false, message: "not authorized" });
         }
 
