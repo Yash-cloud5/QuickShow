@@ -1,8 +1,10 @@
 import Booking from "../models/Booking.js";
 import Show from "../models/Show.js";
-import { getAuth } from "@clerk/express";
+import User from "../models/Users.js";
+import { getAuth, clerkClient } from "@clerk/express";
 import stripe from 'stripe';
 import { inngest } from "../inngest/index.js";
+import { sendConfirmationEmailForBooking } from "../services/emailService.js";
 
 
 // CHECK WHETHER SELECTED SEATS ARE AVAILABLE
@@ -44,6 +46,26 @@ export const createBooking = async (req, res) => {
                 success: false,
                 message: "Unauthorized"
             });
+        }
+
+        // Ensure user is synced to MongoDB
+        const existingUser = await User.findById(userId);
+        if (!existingUser) {
+            try {
+                const clerkUser = await clerkClient.users.getUser(userId);
+                const email = clerkUser?.emailAddresses?.[0]?.emailAddress || "";
+                const name = [clerkUser?.firstName, clerkUser?.lastName].filter(Boolean).join(" ") || clerkUser?.username || "User";
+                const image = clerkUser?.imageUrl || "";
+                if (email) {
+                    await User.findByIdAndUpdate(
+                        userId,
+                        { _id: userId, email, name, image },
+                        { upsert: true, new: true }
+                    );
+                }
+            } catch (userErr) {
+                console.log("Clerk user auto-sync note:", userErr.message);
+            }
         }
 
         const { showId } = req.body;
@@ -115,7 +137,7 @@ export const createBooking = async (req, res) => {
         }]
 
         const session = await stripeInstance.checkout.sessions.create({
-            success_url:`${origin}/loading/my-bookings`,
+            success_url:`${origin}/loading/my-bookings?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url:`${origin}/my-bookings`,
             line_items:line_items,
             mode:'payment',
@@ -129,12 +151,16 @@ export const createBooking = async (req, res) => {
         await booking.save()
 
         //Run inngest scheduler func. to check payment status after 10 mins
-        await inngest.send({
-            name: "app/checkpayment",
-            data: {
-                bookingId: booking._id.toString()
-            }
-        })
+        try {
+            await inngest.send({
+                name: "app/checkpayment",
+                data: {
+                    bookingId: booking._id.toString()
+                }
+            });
+        } catch (inngestErr) {
+            console.log("Inngest checkpayment send note:", inngestErr.message);
+        }
 
         res.json({
             success: true,
@@ -232,7 +258,7 @@ export const payBooking = async (req, res) => {
         }];
 
         const session = await stripeInstance.checkout.sessions.create({
-            success_url: `${origin}/loading/my-bookings`,
+            success_url: `${origin}/loading/my-bookings?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${origin}/my-bookings`,
             line_items: line_items,
             mode: 'payment',
@@ -253,6 +279,85 @@ export const payBooking = async (req, res) => {
     } catch (error) {
         console.error("Pay booking error:", error.message);
         res.json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// API TO VERIFY STRIPE PAYMENT & SEND CONFIRMATION EMAIL IMMEDIATELY
+export const verifyPayment = async (req, res) => {
+    try {
+        const auth = getAuth(req);
+        const userId = auth?.userId || req.auth?.userId || (typeof req.auth === 'function' ? req.auth()?.userId : null);
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized"
+            });
+        }
+
+        const { sessionId } = req.body;
+        if (!sessionId) {
+            return res.status(400).json({
+                success: false,
+                message: "Session ID is required"
+            });
+        }
+
+        const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY);
+        const session = await stripeInstance.checkout.sessions.retrieve(sessionId);
+
+        if (!session) {
+            return res.status(404).json({
+                success: false,
+                message: "Checkout session not found"
+            });
+        }
+
+        const bookingId = session.metadata?.bookingId;
+        if (!bookingId) {
+            return res.status(400).json({
+                success: false,
+                message: "Booking ID missing from session metadata"
+            });
+        }
+
+        const booking = await Booking.findById(bookingId);
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Booking not found"
+            });
+        }
+
+        if (session.payment_status === "paid") {
+            if (!booking.isPaid) {
+                booking.isPaid = true;
+                booking.paymentLink = "";
+                await booking.save();
+                console.log("Booking marked as paid via verifyPayment:", bookingId);
+            }
+
+            // Immediately send confirmation email
+            await sendConfirmationEmailForBooking(bookingId);
+
+            return res.json({
+                success: true,
+                message: "Payment verified successfully",
+                booking
+            });
+        } else {
+            return res.json({
+                success: false,
+                message: "Payment not completed yet",
+                status: session.payment_status
+            });
+        }
+    } catch (error) {
+        console.error("Verify payment error:", error.message);
+        return res.status(500).json({
             success: false,
             message: error.message
         });

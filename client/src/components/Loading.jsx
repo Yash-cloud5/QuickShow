@@ -1,19 +1,54 @@
-import React, { useEffect } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import React, { useEffect, useRef } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import BlurCircle from './BlurCircle'
+import { useAppContext } from '../context/AppContext'
+import toast from 'react-hot-toast'
 
 const Loading = () => {
   const { nextUrl } = useParams()
+  const [searchParams] = useSearchParams()
+  const sessionId = searchParams.get('session_id')
   const navigate = useNavigate()
+  const { axios, getToken } = useAppContext()
+  const verifiedRef = useRef(false)
 
   useEffect(() => {
-    if (nextUrl) {
-      const timer = setTimeout(() => {
-        navigate('/' + nextUrl)
-      }, 4000)
-      return () => clearTimeout(timer)
+    let isMounted = true
+
+    const verifyAndRedirect = async () => {
+      if (sessionId && !verifiedRef.current) {
+        verifiedRef.current = true
+        try {
+          const token = await getToken()
+          const { data } = await axios.post(
+            '/api/booking/verify-payment',
+            { sessionId },
+            { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+          )
+          if (data?.success) {
+            toast.success('Payment confirmed! A confirmation email has been sent to your inbox.')
+          }
+        } catch (error) {
+          console.error('Payment verification note:', error?.response?.data?.message || error.message)
+        }
+      }
+
+      if (nextUrl) {
+        const timer = setTimeout(() => {
+          if (isMounted) {
+            navigate('/' + nextUrl, { replace: true })
+          }
+        }, sessionId ? 2500 : 3500)
+        return () => clearTimeout(timer)
+      }
     }
-  }, [nextUrl, navigate])
+
+    verifyAndRedirect()
+
+    return () => {
+      isMounted = false
+    }
+  }, [nextUrl, sessionId, navigate, axios, getToken])
 
   return (
     <div className='relative flex flex-col justify-center items-center min-h-[75vh] px-4'>
@@ -28,7 +63,7 @@ const Loading = () => {
         <div className='text-center z-10 space-y-1.5'>
           <h2 className='text-lg font-semibold text-white'>Processing Payment</h2>
           <p className='text-xs text-gray-400 max-w-sm'>
-            Please wait while we confirm your booking and redirect you to your tickets...
+            Please wait while we confirm your booking and send the confirmation email to your address...
           </p>
         </div>
       )}

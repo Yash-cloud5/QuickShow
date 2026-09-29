@@ -1,6 +1,7 @@
 import stripe from "stripe";
 import Booking from "../models/Booking.js";
 import { inngest } from "../inngest/index.js";
+import { sendConfirmationEmailForBooking } from "../services/emailService.js";
 
 export const stripeWebhooks = async (request, response) => {
     const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY);
@@ -23,6 +24,41 @@ export const stripeWebhooks = async (request, response) => {
 
     try {
         switch (event.type) {
+            case "checkout.session.completed": {
+                const session = event.data.object;
+                const bookingId = session.metadata?.bookingId;
+
+                if (!bookingId) {
+                    console.log("Booking ID not found in session metadata for checkout.session.completed");
+                    break;
+                }
+
+                const booking = await Booking.findById(bookingId);
+                if (!booking) {
+                    console.log("Booking not found for bookingId:", bookingId);
+                    break;
+                }
+
+                if (!booking.isPaid) {
+                    booking.isPaid = true;
+                    booking.paymentLink = "";
+                    await booking.save();
+                    console.log("Booking marked as paid via checkout.session.completed:", bookingId);
+                }
+
+                // Send Confirmation Email directly & trigger Inngest
+                await sendConfirmationEmailForBooking(bookingId);
+                try {
+                    await inngest.send({
+                        name: "app/show.booked",
+                        data: { bookingId }
+                    });
+                } catch (inngestErr) {
+                    console.log("Inngest send event note:", inngestErr.message);
+                }
+                break;
+            }
+
             case "payment_intent.succeeded": {
                 const paymentIntent = event.data.object;
 
@@ -31,7 +67,7 @@ export const stripeWebhooks = async (request, response) => {
                         payment_intent: paymentIntent.id,
                     });
 
-                const session = sessionList.data[0];
+                const session = sessionList.data?.[0];
 
                 if (!session) {
                     console.log(
@@ -41,25 +77,36 @@ export const stripeWebhooks = async (request, response) => {
                     break;
                 }
 
-                const { bookingId } = session.metadata;
+                const bookingId = session.metadata?.bookingId;
 
                 if (!bookingId) {
-                    console.log("Booking ID not found in session metadata");
+                    console.log("Booking ID not found in session metadata for payment_intent.succeeded");
                     break;
                 }
 
-                await Booking.findByIdAndUpdate(bookingId, {
-                    isPaid: true,
-                    paymentLink: "",
-                });
+                const booking = await Booking.findById(bookingId);
+                if (!booking) {
+                    console.log("Booking not found for bookingId:", bookingId);
+                    break;
+                }
 
-                console.log("Booking marked as paid:", bookingId);
+                if (!booking.isPaid) {
+                    booking.isPaid = true;
+                    booking.paymentLink = "";
+                    await booking.save();
+                    console.log("Booking marked as paid via payment_intent.succeeded:", bookingId);
+                }
 
-                //Send Confirmation Email
-                await inngest.send({
-                    name:"app/show.booked",
-                    data:{bookingId}
-                })
+                // Send Confirmation Email directly & trigger Inngest
+                await sendConfirmationEmailForBooking(bookingId);
+                try {
+                    await inngest.send({
+                        name: "app/show.booked",
+                        data: { bookingId }
+                    });
+                } catch (inngestErr) {
+                    console.log("Inngest send event note:", inngestErr.message);
+                }
 
                 break;
             }
