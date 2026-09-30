@@ -10,10 +10,16 @@ import { useAppContext } from '../../context/AppContext'
 const Layout = () => {
   const { user, isLoaded } = useUser()
   const { isAdmin, isAdminLoading } = useAppContext()
+  const hasAlerted = React.useRef(false)
 
   useEffect(() => {
     if (isLoaded && user && !isAdminLoading && !isAdmin) {
-      toast.error('You are not authorised to access admin dashboard')
+      if (!hasAlerted.current) {
+        hasAlerted.current = true
+        toast.error('You are not authorised to access admin dashboard')
+      }
+    } else if (isAdmin) {
+      hasAlerted.current = false
     }
   }, [isLoaded, user, isAdminLoading, isAdmin])
 

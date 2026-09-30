@@ -4,20 +4,37 @@ import { useAuth, useUser } from "@clerk/react";
 import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 
-axios.defaults.baseURL = import.meta.env.VITE_BASE_URL;
+const rawBaseUrl = (import.meta.env.VITE_BASE_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+axios.defaults.baseURL = rawBaseUrl;
 
 export const AppContext = createContext();
 
 export const AppProvider = ({ children }) => {
 
-    const [isAdmin, setIsAdmin] = useState(false);
+    const { user, isLoaded } = useUser();
+    const { getToken } = useAuth();
+
+    const checkClientAdmin = (u) => {
+        if (!u) return false;
+        const meta = {
+            ...(u.unsafeMetadata || {}),
+            ...(u.publicMetadata || {})
+        };
+        return (
+            String(meta.role || '').toLowerCase() === 'admin' ||
+            String(meta.user || '').toLowerCase() === 'admin' ||
+            meta.isAdmin === true ||
+            meta.isAdmin === 'true' ||
+            meta.admin === true ||
+            meta.admin === 'true'
+        );
+    };
+
+    const [isAdmin, setIsAdmin] = useState(() => checkClientAdmin(user));
     const [isAdminLoading, setIsAdminLoading] = useState(true);
     const [shows, setShows] = useState([]);
     const [favoriteMovies, setFavoriteMovies] = useState([]);
-    const image_base_url = import.meta.env.VITE_TMDB_IMAGE_BASE_URL || 'https://image.tmdb.org/t/p/original';
-
-    const { user, isLoaded } = useUser();
-    const { getToken } = useAuth();
+    const image_base_url = (import.meta.env.VITE_TMDB_IMAGE_BASE_URL || 'https://image.tmdb.org/t/p/original').trim();
 
     const location = useLocation();
     const navigate = useNavigate();
@@ -30,14 +47,18 @@ export const AppProvider = ({ children }) => {
             return false;
         }
 
+        const clientIsAdmin = checkClientAdmin(user);
+        if (clientIsAdmin) {
+            setIsAdmin(true);
+        }
+
         try {
-            setIsAdminLoading(true);
             const token = await getToken();
 
             if (!token) {
-                setIsAdmin(false);
+                if (!clientIsAdmin) setIsAdmin(false);
                 setIsAdminLoading(false);
-                return false;
+                return clientIsAdmin;
             }
 
             const { data } = await axios.get(
@@ -49,35 +70,27 @@ export const AppProvider = ({ children }) => {
                 }
             );
 
-            if (data.success && data.isAdmin) {
+            if (data?.success && data?.isAdmin) {
                 setIsAdmin(true);
                 setIsAdminLoading(false);
                 return true;
             } else {
-                setIsAdmin(false);
-                setIsAdminLoading(false);
-                if (location.pathname.startsWith("/admin")) {
-                    navigate("/");
-                    toast.error(
-                        "You are not authorised to access admin dashboard"
-                    );
+                if (!clientIsAdmin) {
+                    setIsAdmin(false);
                 }
-                return false;
+                setIsAdminLoading(false);
+                return clientIsAdmin;
             }
 
         } catch (error) {
             console.error("Error checking admin status:", error);
-            setIsAdmin(false);
-            setIsAdminLoading(false);
-            if (location.pathname.startsWith("/admin")) {
-                navigate("/");
-                toast.error(
-                    "You are not authorised to access admin dashboard"
-                );
+            if (!clientIsAdmin) {
+                setIsAdmin(false);
             }
-            return false;
+            setIsAdminLoading(false);
+            return clientIsAdmin;
         }
-    }, [user, getToken, location.pathname, navigate]);
+    }, [user, getToken]);
 
     // API to fetch all shows
     const fetchShows = async () => {
@@ -133,6 +146,11 @@ export const AppProvider = ({ children }) => {
     useEffect(() => {
         if (isLoaded) {
             if (user) {
+                const clientAdmin = checkClientAdmin(user);
+                if (clientAdmin) {
+                    setIsAdmin(true);
+                    setIsAdminLoading(false);
+                }
                 fetchIsAdmin();
                 fetchFavoriteMovies();
             } else {
@@ -141,7 +159,7 @@ export const AppProvider = ({ children }) => {
                 setFavoriteMovies([]);
             }
         }
-    }, [isLoaded, user]);
+    }, [isLoaded, user, fetchIsAdmin, fetchFavoriteMovies]);
 
     const value = {
         axios,

@@ -21,7 +21,11 @@ app.use('/api/stripe',express.raw({type:'application/json'}),stripeWebhooks)
 
 //Middleware
 app.use(express.json())
-app.use(cors())
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}))
 app.use(clerkMiddleware())
 
 //Api Routes
@@ -32,4 +36,8 @@ app.use('/api/booking',bookingRouter)
 app.use('/api/admin',adminRouter)
 app.use('/api/user',userRouter)
 
-app.listen(port,()=> console.log(`Server listening at http://localhost:${port}`));
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+    app.listen(port, () => console.log(`Server listening at http://localhost:${port}`));
+}
+
+export default app;

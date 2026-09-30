@@ -44,6 +44,38 @@ export const getNowPlayingMovies = async (req, res) => {
     }
 };
 
+// API TO SEARCH MOVIES FROM TMDB API
+export const searchMovies = async (req, res) => {
+    try {
+        const { query } = req.query;
+
+        if (!query || query.trim() === '') {
+            return res.json({
+                success: true,
+                movies: []
+            });
+        }
+
+        const data = await fetchTmdbWithRetry(
+            `https://api.themoviedb.org/3/search/movie?query=${encodeURIComponent(query.trim())}&include_adult=false&language=en-US&page=1`
+        );
+        const movies = data?.results || [];
+
+        res.json({
+            success: true,
+            movies
+        });
+
+    } catch (error) {
+        console.error("SEARCH MOVIES ERROR:", error.message);
+
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
 
 // API TO ADD A NEW SHOW TO THE DATABASE
 export const addShow = async (req, res) => {
